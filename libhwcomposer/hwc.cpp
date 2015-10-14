@@ -310,7 +310,7 @@ static int hwc_eventControl(struct hwc_composer_device_1* dev, int dpy,
             ALOGD_IF (VSYNC_DEBUG, "VSYNC state changed to %s",
                       (enable)?"ENABLED":"DISABLED");
             break;
-#ifdef QCOM_BSP
+#ifdef QTI_BSP
         case  HWC_EVENT_ORIENTATION:
             if(dpy == HWC_DISPLAY_PRIMARY) {
                 Locker::Autolock _l(ctx->mDrawLock);
