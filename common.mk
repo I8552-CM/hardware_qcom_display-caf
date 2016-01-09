@@ -39,7 +39,6 @@ ifeq ($(TARGET_USES_QCOM_BSP),true)
 # This flag is used to compile out any features that depend on framework changes
     common_flags += -DQCOM_BSP
     common_flags += -DQTI_BSP
-    common_includes += vendor/qcom/opensource/display-frameworks/include
 endif
 ifneq (,$(filter $(QCOM_BOARD_PLATFORMS),$(TARGET_BOARD_PLATFORM)))
 # This check is to pick the kernel headers from the right location.
