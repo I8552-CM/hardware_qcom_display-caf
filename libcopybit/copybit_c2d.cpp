@@ -202,17 +202,16 @@ open:  open_copybit
  * The COPYBIT Module
  */
 struct copybit_module_t HAL_MODULE_INFO_SYM = {
-common: {
-tag: HARDWARE_MODULE_TAG,
-     version_major: 1,
-     version_minor: 0,
-     id: COPYBIT_HARDWARE_MODULE_ID,
-     name: "QCT COPYBIT C2D 2.0 Module",
-     author: "Qualcomm",
-     methods: &copybit_module_methods
-        }
+    .common = {
+        .tag = HARDWARE_MODULE_TAG,
+        .version_major = 1,
+        .version_minor = 0,
+        .id = COPYBIT_HARDWARE_MODULE_ID,
+        .name = "QCT COPYBIT C2D 2.0 Module",
+        .author = "Qualcomm",
+        .methods = &copybit_module_methods
+    },
 };
-
 
 /* thread function which waits on the timeStamp and cleans up the surfaces */
 static void* c2d_wait_loop(void* ptr) {
