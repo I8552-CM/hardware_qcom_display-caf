@@ -40,9 +40,9 @@
 #define MAX_DISPLAY_DIM 2048
 #define MAX_MDP_YUV_COUNT 2
 
-#ifdef QTI_BSP
+/*#ifdef QTI_BSP
 #include <exhwcomposer_defs.h>
-#endif
+#endif*/
 
 //Fwrd decls
 struct hwc_context_t;
