@@ -646,7 +646,9 @@ bool MDPComp::isOnlyVideoDoable(hwc_context_t *ctx,
 
 /* Checks for conditions where YUV layers cannot be bypassed */
 bool MDPComp::isYUVDoable(hwc_context_t* ctx, hwc_layer_1_t* layer) {
-    if(isSkipLayer(layer)) {
+    bool extAnimBlockFeature = mDpy && ctx->listStats[mDpy].isDisplayAnimating;
+
+    if(isSkipLayer(layer) && !extAnimBlockFeature) {
         ALOGD_IF(isDebug(), "%s: Video marked SKIP dpy %d", __FUNCTION__, mDpy);
         return false;
     }
@@ -728,24 +730,6 @@ bool MDPComp::batchLayers(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
     return true;
 }
 
-int MDPComp::checkOpaqueSurface(hwc_context_t *ctx,
-    hwc_display_contents_1_t* list) {
-    int opaqueSurfaceLayerID = 0;
-    int numAppLayers = ctx->listStats[mDpy].numAppLayers;
-
-    for (int i = numAppLayers-1; i >= 0; i--) {
-        hwc_layer_1_t* layer = &list->hwLayers[i];
-        if (layer->handle) {
-            private_handle_t *hnd = (private_handle_t *)layer->handle;
-            if (hnd->flags & private_handle_t::PRIV_FLAGS_OPAQUE_SURFACE) {
-                opaqueSurfaceLayerID = i;
-                break;
-            }
-        }
-    }
-    return opaqueSurfaceLayerID;
-}
-
 void MDPComp::updateLayerCache(hwc_context_t* ctx,
         hwc_display_contents_1_t* list) {
     int numAppLayers = ctx->listStats[mDpy].numAppLayers;
@@ -789,6 +773,15 @@ int MDPComp::getAvailablePipes(hwc_context_t* ctx) {
 void MDPComp::updateYUV(hwc_context_t* ctx, hwc_display_contents_1_t* list) {
 
     int nYuvCount = ctx->listStats[mDpy].yuvCount;
+    if(!nYuvCount && mDpy) {
+        //Reset "No animation on external display" related  parameters.
+        ctx->mPrevCropVideo.left = ctx->mPrevCropVideo.top =
+            ctx->mPrevCropVideo.right = ctx->mPrevCropVideo.bottom = 0;
+        ctx->mPrevDestVideo.left = ctx->mPrevDestVideo.top =
+            ctx->mPrevDestVideo.right = ctx->mPrevDestVideo.bottom = 0;
+        ctx->mPrevTransformVideo = 0;
+        return;
+     }
     for(int index = 0;index < nYuvCount; index++){
         int nYuvIndex = ctx->listStats[mDpy].yuvIndices[index];
         hwc_layer_1_t* layer = &list->hwLayers[nYuvIndex];
@@ -882,34 +875,6 @@ int MDPComp::prepare(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
         ALOGD_IF(isDebug(), "%s: Unsupported layer count for mdp composition",
                 __FUNCTION__);
         return -1;
-    }
-
-    // Detect the start of animation and fall back to GPU only once to cache
-    // all the layers in FB and display FB content untill animation completes.
-    if(ctx->listStats[mDpy].isDisplayAnimating) {
-        mCurrentFrame.needsRedraw = false;
-        if(ctx->mAnimationState[mDpy] == ANIMATION_STOPPED) {
-            mCurrentFrame.needsRedraw = true;
-            ctx->mAnimationState[mDpy] = ANIMATION_STARTED;
-        }
-        setMDPCompLayerFlags(ctx, list);
-        mCachedFrame.updateCounts(mCurrentFrame);
-        ret = -1;
-        return ret;
-    } else {
-        ctx->mAnimationState[mDpy] = ANIMATION_STOPPED;
-    }
-
-    //Check if there is opaque surface in the list
-    int opaqueSurfaceLayerID = checkOpaqueSurface(ctx, list);
-    if (opaqueSurfaceLayerID) {
-        //Need to set all layers below it to Overlay
-        for (int i = 0; i < opaqueSurfaceLayerID; i++) {
-            mCurrentFrame.isFBComposed[i] = false;
-        }
-        setMDPCompLayerFlags(ctx, list);
-        ALOGD_IF(isDebug(), "%s: Found Opaque Surface for display=%d, layer=%d",
-                __FUNCTION__, mDpy, opaqueSurfaceLayerID);
     }
 
     //Hard conditions, if not met, cannot do MDP comp
@@ -1043,8 +1008,6 @@ bool MDPCompLowRes::allocLayerPipes(hwc_context_t *ctx,
                                     hwc_display_contents_1_t* list) {
     if(isYuvPresent(ctx, mDpy)) {
         int nYuvCount = ctx->listStats[mDpy].yuvCount;
-        eDest yuvIndex[MAX_MDP_YUV_COUNT] = {OV_INVALID, OV_INVALID};
-        int counter = 0;
 
         for(int index = 0; index < nYuvCount ; index ++) {
             int nYuvIndex = ctx->listStats[mDpy].yuvIndices[index];
@@ -1064,17 +1027,6 @@ bool MDPCompLowRes::allocLayerPipes(hwc_context_t *ctx,
                 ALOGD_IF(isDebug(), "%s: Unable to get pipe for Videos",
                          __FUNCTION__);
                 return false;
-            }
-            yuvIndex[counter++] = pipe_info.index;
-        }
-        if(counter == 1) {
-            //Reset the alternative YUV index
-            if(yuvIndex[0]%MAX_MDP_YUV_COUNT) {
-                ctx->mPrevWHF[mDpy][0].w = 0;
-                ctx->mPrevWHF[mDpy][0].h = 0;
-            }else {
-                ctx->mPrevWHF[mDpy][1].w = 0;
-                ctx->mPrevWHF[mDpy][1].h = 0;
             }
         }
     }
@@ -1135,7 +1087,6 @@ bool MDPCompLowRes::draw(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
     LayerProp *layerProp = ctx->layerProp[mDpy];
 
     int numHwLayers = ctx->listStats[mDpy].numAppLayers;
-    int opaqueSurfaceLayerID = checkOpaqueSurface(ctx, list);
     for(int i = 0; i < numHwLayers && mCurrentFrame.mdpCount; i++ )
     {
         if(mCurrentFrame.isFBComposed[i]) continue;
@@ -1145,13 +1096,6 @@ bool MDPCompLowRes::draw(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
         if(!hnd) {
             ALOGE("%s handle null", __FUNCTION__);
             return false;
-        }
-
-        if (i < opaqueSurfaceLayerID) {
-            //Skip the layer which is lower than then opaque surface layer.
-            ALOGD_IF(isDebug(), "%s,%d: Display=%d, Skip layer=%d under opaque"\
-            " layer=%d", __FUNCTION__, __LINE__, mDpy, i, opaqueSurfaceLayerID);
-            continue;
         }
 
         int mdpIndex = mCurrentFrame.layerToMDP[i];
@@ -1248,8 +1192,6 @@ bool MDPCompHighRes::allocLayerPipes(hwc_context_t *ctx,
 
     if(isYuvPresent(ctx, mDpy)) {
         int nYuvCount = ctx->listStats[mDpy].yuvCount;
-        eDest yuvIndex[MAX_MDP_YUV_COUNT] = {OV_INVALID, OV_INVALID};
-        int counter = 0;
 
         for(int index = 0; index < nYuvCount; index ++) {
             int nYuvIndex = ctx->listStats[mDpy].yuvIndices[index];
@@ -1264,18 +1206,7 @@ bool MDPCompHighRes::allocLayerPipes(hwc_context_t *ctx,
                 //TODO: windback pipebook data on fail
                 return false;
             }
-            yuvIndex[counter++] = pipe_info.lIndex;
             pipe_info.zOrder = nYuvIndex;
-        }
-        if(counter == 1) {
-            //Reset the alternative YUV index
-            if(yuvIndex[0]%MAX_MDP_YUV_COUNT) {
-                ctx->mPrevWHF[mDpy][0].w = 0;
-                ctx->mPrevWHF[mDpy][0].h = 0;
-            }else {
-                ctx->mPrevWHF[mDpy][1].w = 0;
-                ctx->mPrevWHF[mDpy][1].h = 0;
-            }
         }
     }
 
@@ -1286,8 +1217,7 @@ bool MDPCompHighRes::allocLayerPipes(hwc_context_t *ctx,
         if(isYuvBuffer(hnd))
             continue;
 
-        int mdpIndex = mCurrentFrame.layerToMDP[index];
-        PipeLayerPair& info = mCurrentFrame.mdpToLayer[mdpIndex];
+        PipeLayerPair& info = mCurrentFrame.mdpToLayer[index];
         info.pipeInfo = new MdpPipeInfoHighRes;
         info.rot = NULL;
         MdpPipeInfoHighRes& pipe_info = *(MdpPipeInfoHighRes*)info.pipeInfo;
@@ -1352,7 +1282,6 @@ bool MDPCompHighRes::draw(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
     LayerProp *layerProp = ctx->layerProp[mDpy];
 
     int numHwLayers = ctx->listStats[mDpy].numAppLayers;
-    int opaqueSurfaceLayerID = checkOpaqueSurface(ctx, list);
     for(int i = 0; i < numHwLayers && mCurrentFrame.mdpCount; i++ )
     {
         if(mCurrentFrame.isFBComposed[i]) continue;
@@ -1362,13 +1291,6 @@ bool MDPCompHighRes::draw(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
         if(!hnd) {
             ALOGE("%s handle null", __FUNCTION__);
             return false;
-        }
-
-        if (i < opaqueSurfaceLayerID) {
-            //Skip the layer which is lower than then opaque surface layer.
-            ALOGD_IF(isDebug(), "%s,%d: Display=%d, Skip layer=%d under opaque"\
-            " layer=%d", __FUNCTION__, __LINE__, mDpy, i, opaqueSurfaceLayerID);
-            continue;
         }
 
         if(!(layerProp[i].mFlags & HWC_MDPCOMP)) {

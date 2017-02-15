@@ -1,6 +1,6 @@
 /*
  * Copyright (C) 2010 The Android Open Source Project
- * Copyright (C) 2012-2013, 2015, The Linux Foundation. All rights reserved.
+ * Copyright (C) 2012-2013, The Linux Foundation. All rights reserved.
  *
  * Not a Contribution.
  *
@@ -18,6 +18,7 @@
  */
 
 #define DEBUG_COPYBIT 0
+#include <sync/sync.h>
 #include <copybit.h>
 #include <utils/Timers.h>
 #include "hwc_copybit.h"
@@ -25,7 +26,6 @@
 #include "mdp_version.h"
 #include "gr.h"
 #include "cb_utils.h"
-#include "sync/sync.h"
 
 #ifdef NO_IOMMU
 #define HEAP_ID GRALLOC_USAGE_PRIVATE_UI_CONTIG_HEAP
@@ -454,7 +454,7 @@ int  CopyBit::drawLayerUsingCopybit(hwc_context_t *dev, hwc_layer_1_t *layer,
             copybit_rect_t tmp_rect;
             tmp_dst.w = tmp_w;
             tmp_dst.h = tmp_h;
-            tmp_dst.format = fbHandle->format;
+            tmp_dst.format = tmpHnd->format;
             tmp_dst.handle = tmpHnd;
             tmp_dst.horiz_padding = src.horiz_padding;
             tmp_dst.vert_padding = src.vert_padding;
@@ -544,8 +544,7 @@ int CopyBit::allocRenderBuffers(int w, int h, int f)
     for (int i = 0; i < NUM_RENDER_BUFFERS; i++) {
         if (mRenderBuffer[i] == NULL) {
             ret = alloc_buffer(&mRenderBuffer[i],
-                               w, h, f,
-                               HEAP_ID);
+                               w, h, f, HEAP_ID);
         }
         if(ret < 0) {
             freeRenderBuffers();
