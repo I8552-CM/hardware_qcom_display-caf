@@ -43,14 +43,12 @@ using namespace overlay;
 #define VSYNC_DEBUG 0
 #define POWER_MODE_DEBUG 1
 
-#define NON_PRO_8960_SOC_ID 87
-
 static int hwc_device_open(const struct hw_module_t* module,
                            const char* name,
                            struct hw_device_t** device);
 
 static struct hw_module_methods_t hwc_module_methods = {
-    .open = hwc_device_open,
+    .open = hwc_device_open
 };
 
 static void reset_panel(struct hwc_composer_device_1* dev);
@@ -66,7 +64,7 @@ hwc_module_t HAL_MODULE_INFO_SYM = {
         .methods = &hwc_module_methods,
         .dso = 0,
         .reserved = {0},
-    },
+    }
 };
 
 /* In case of non-hybrid WFD session, we are fooling SF by piggybacking on
@@ -154,7 +152,7 @@ static int hwc_prepare_primary(hwc_composer_device_1 *dev,
     hwc_context_t* ctx = (hwc_context_t*)(dev);
     const int dpy = HWC_DISPLAY_PRIMARY;
     int ret = -1;
-    if(UNLIKELY(!ctx->mBasePipeSetup) &&
+    if(UNLIKELY(!ctx->mBasePipeSetup) && 
             qdutils::MDPVersion::getInstance().getMDPVersion() >= qdutils::MDP_V4_2)
         setupBasePipe(ctx);
     if (LIKELY(list && list->numHwLayers > 1) &&
@@ -166,10 +164,10 @@ static int hwc_prepare_primary(hwc_composer_device_1 *dev,
             ctx->mFBUpdate[dpy]->prepare(ctx, list, fbZ);
         }
 #ifdef USE_COPYBIT_COMPOSITION_FALLBACK
-        // Use Copybit, when Full/Partial MDP comp fails
-        // (only for 8960 which has  dedicated 2D core)
-        if((ret < 1) && (ctx->mSocId == NON_PRO_8960_SOC_ID) && ctx->mCopyBit[dpy])
-            ctx->mCopyBit[dpy]->prepare(ctx, list, dpy);
+            // Use Copybit, when MDP comp fails
+            // (only for 8960 which has  dedicated 2D core)
+            if((ret < 1) && ctx->mCopyBit[dpy])
+                ctx->mCopyBit[dpy]->prepare(ctx, list, dpy);
 #endif
     }
     return 0;
@@ -193,12 +191,20 @@ static int hwc_prepare_external(hwc_composer_device_1 *dev,
               ctx->mFBUpdate[dpy]->prepare(ctx, list, fbZ);
            }
 #ifdef USE_COPYBIT_COMPOSITION_FALLBACK
-           // Use Copybit, when Full/Partial MDP comp fails
+           // Use Copybit, when MDP comp fails
            // (only for 8960 which has  dedicated 2D core)
-           if((ret < 1) && (ctx->mSocId == NON_PRO_8960_SOC_ID) && ctx->mCopyBit[dpy] &&
-                 !ctx->listStats[dpy].isDisplayAnimating)
-                ctx->mCopyBit[dpy]->prepare(ctx, list, dpy);
+           if((ret < 1) && ctx->mCopyBit[dpy] &&
+                   !ctx->listStats[dpy].isDisplayAnimating)
+               ctx->mCopyBit[dpy]->prepare(ctx, list, dpy);
 #endif
+            if(ctx->listStats[dpy].isDisplayAnimating) {
+                // Mark all app layers as HWC_OVERLAY for external during
+                // animation, so that SF doesnt draw it on FB
+                for(int i = 0 ;i < ctx->listStats[dpy].numAppLayers; i++) {
+                    hwc_layer_1_t *layer = &list->hwLayers[i];
+                    layer->compositionType = HWC_OVERLAY;
+                }
+            }
         } else {
             /* External Display is in Pause state.
              * Mark all application layers as OVERLAY so that
@@ -229,6 +235,15 @@ static int hwc_prepare_virtual(hwc_composer_device_1 *dev,
             if(ctx->mMDPComp[dpy]->prepare(ctx, list) < 0) {
                 const int fbZ = 0;
                 ctx->mFBUpdate[dpy]->prepare(ctx, list, fbZ);
+            }
+
+            if(ctx->listStats[dpy].isDisplayAnimating) {
+                // Mark all app layers as HWC_OVERLAY for virtual during
+                // animation, so that SF doesnt draw it on FB
+                for(int i = 0 ;i < ctx->listStats[dpy].numAppLayers; i++) {
+                    hwc_layer_1_t *layer = &list->hwLayers[i];
+                    layer->compositionType = HWC_OVERLAY;
+                }
             }
         } else {
             /* Virtual Display is in Pause state.
@@ -315,6 +330,8 @@ static int hwc_eventControl(struct hwc_composer_device_1* dev, int dpy,
             if(dpy == HWC_DISPLAY_PRIMARY) {
                 Locker::Autolock _l(ctx->mDrawLock);
                 // store the primary display orientation
+                // will be used in hwc_video::configure to disable
+                // rotation animation on external display
                 ctx->deviceOrientation = enable;
             }
             break;
@@ -537,8 +554,13 @@ static int hwc_set_primary(hwc_context_t *ctx, hwc_display_contents_1_t* list) {
             }
         }
 
+#ifdef USE_MDP3
+        if (ctx->mFbDev->post(ctx->mFbDev, fbLayer->handle)) {
+             ALOGE("%s: ctx->mFbDev->post fail!", __FUNCTION__);
+#else
         if(!Overlay::displayCommit(ctx->dpyAttr[dpy].fd)) {
             ALOGE("%s: display commit fail for %d dpy!", __FUNCTION__, dpy);
+#endif
             ret = -1;
         }
     }
@@ -850,10 +872,6 @@ static int hwc_device_open(const struct hw_module_t* module, const char* name,
     if (!strcmp(name, HWC_HARDWARE_COMPOSER)) {
         struct hwc_context_t *dev;
         dev = (hwc_context_t*)malloc(sizeof(*dev));
-        if (dev == NULL) {
-            ALOGE("%s: malloc failure!", __FUNCTION__);
-            return status;
-        }
         memset(dev, 0, sizeof(*dev));
 
         //Initialize hwc context
